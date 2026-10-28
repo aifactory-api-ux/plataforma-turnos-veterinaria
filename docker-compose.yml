@@ -1,0 +1,76 @@
+# Stack de la API de la clínica veterinaria.
+#
+# Servicios:
+#   db    PostgreSQL 16 con volumen nombrado y comprobación de disponibilidad.
+#   api   API FastAPI construida desde el Dockerfile de la raíz.
+#   tests Suite de pytest ejecutada dentro de la misma imagen contra `db`.
+#
+# El servicio `tests` es de un solo uso y lleva el perfil `test`, de modo que
+# `docker compose up --build --wait` levanta únicamente `db` y `api` y termina
+# con código de salida 0 al comprobar la salud de ambos. La suite se ejecuta
+# de forma explícita con `docker compose run --rm tests`, que habilita el
+# perfil del servicio de destino.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vetclinic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vetclinic}
+      POSTGRES_DB: ${POSTGRES_DB:-vetclinic}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-vetclinic} -d ${POSTGRES_DB:-vetclinic}
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://vetclinic:vetclinic@db:5432/vetclinic}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-clave-de-desarrollo-no-usar-en-produccion}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["pytest", "-q"]
+    profiles:
+      - test
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://vetclinic:vetclinic@db:5432/vetclinic}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-clave-de-desarrollo-no-usar-en-produccion}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+volumes:
+  pgdata:
